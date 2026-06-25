@@ -1,0 +1,54 @@
+name: callee-withheld
+
+# Negative-posture callee. The caller (orchestrate.yaml) declares a secret
+# (CALLBACK_SECRET mapped to CALLBACK_WITHHELD_SECRET) that is intentionally NOT
+# set on the repo, so it arrives empty. This callee asserts the secret is absent
+# and fails on purpose, proving the withheld-secret path is a real, observed
+# negative rather than a silently skipped one.
+#
+# It is also directly dispatchable (workflow_dispatch) so the scenario suite can
+# fire it as a standalone run with its own run id and register that run with
+# expected-conclusion: failure. On both paths CALLBACK_SECRET is empty: on
+# workflow_call because the caller mapped it to the unset CALLBACK_WITHHELD_SECRET,
+# and on workflow_dispatch because no secrets are inherited at all.
+
+on:
+  workflow_dispatch: {}
+  workflow_call:
+    inputs:
+      environment:
+        required: false
+        type: string
+      sha:
+        required: false
+        type: string
+      version:
+        required: false
+        type: string
+      target_env:
+        required: false
+        type: string
+    secrets:
+      CALLBACK_SECRET:
+        required: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse when the required secret was withheld
+        env:
+          CALLBACK_SECRET: ${{ secrets.CALLBACK_SECRET }}
+        run: |
+          set -euo pipefail
+          RECEIVED="${CALLBACK_SECRET:-}"
+          if [ -n "$RECEIVED" ]; then
+            echo "::error::callee-withheld expected the secret to be absent, but it was present"
+            exit 1
+          fi
+          echo "::error::callee-withheld: required secret withheld; refusing to proceed (expected negative)"
+          {
+            echo "## callee-withheld"
+            echo "- required secret absent, callee refused: yes (expected failure)"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1

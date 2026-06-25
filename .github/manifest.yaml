@@ -1,0 +1,65 @@
+ci:
+  config:
+    schema_version: 1
+    trunk_branch: main
+    cli_version: v0.4.2-rc.0
+    state_token: ${{ secrets.CASCADE_STATE_TOKEN }}
+    manifest_file: .github/manifest.yaml
+    manifest_key: ci
+    environments: [staging, prod]
+    triggers: [src/**]
+    builds:
+      # Posture 1: a callback that opts in to an explicit secret. The callee
+      # asserts the secret arrived (non-empty) and reports its presence.
+      - name: build-secret
+        workflow: .github/workflows/callee-secret.yaml
+        triggers: []
+        secrets:
+          CALLBACK_SECRET: CALLBACK_SHARED_SECRET
+
+      # Posture 2: a callback with an explicit least-privilege permissions block.
+      # The callee echoes the token scopes it received.
+      - name: build-perms
+        workflow: .github/workflows/callee-perms.yaml
+        triggers: []
+        permissions:
+          contents: read
+          packages: read
+
+      # Posture 3: a callback requesting id-token: write so OIDC propagates to
+      # the callee. The callee mints an OIDC token and asserts it was issued.
+      - name: build-oidc
+        workflow: .github/workflows/callee-oidc.yaml
+        triggers: []
+        permissions:
+          contents: read
+          id-token: write
+
+      # Posture 4: a callback that depends on build-perms (needs ordering) and
+      # carries a retry wrapper. The callee asserts the ordering and the suite
+      # asserts the retry wrapper is emitted.
+      - name: build-needs
+        workflow: .github/workflows/callee-needs.yaml
+        triggers: []
+        depends_on: [build-perms]
+        retries: 2
+
+      # Negative posture: a callback whose declared secret is intentionally NOT
+      # set on the repo. The callee asserts the secret is ABSENT and fails. The
+      # suite registers this run with expected-conclusion: failure.
+      - name: build-withheld
+        workflow: .github/workflows/callee-withheld.yaml
+        # A path the scenario merge never touches, so this callback is gated out
+        # of the merge orchestrate run (it must not abort it). The withheld-
+        # secret negative is proven by dispatching the callee standalone and
+        # registering that run with expected-conclusion: failure.
+        triggers: [withheld/**]
+        secrets:
+          CALLBACK_SECRET: CALLBACK_WITHHELD_SECRET
+    deploys:
+      - name: app
+        workflow: .github/workflows/deploy-app.yaml
+        triggers: []
+  state:
+    prod: {}
+    staging: {}

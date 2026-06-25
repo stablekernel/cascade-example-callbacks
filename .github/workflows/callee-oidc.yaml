@@ -1,0 +1,49 @@
+name: callee-oidc
+
+# Callback callee for the OIDC posture. The caller job (emitted into
+# orchestrate.yaml) carries id-token: write, which propagates an OIDC issuer to
+# this reusable callee. This callee mints an OIDC token and asserts one was
+# issued, never printing the token itself.
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: false
+        type: string
+      sha:
+        required: false
+        type: string
+      version:
+        required: false
+        type: string
+      target_env:
+        required: false
+        type: string
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assert an OIDC token can be minted
+        run: |
+          set -euo pipefail
+          # ACTIONS_ID_TOKEN_REQUEST_URL and ACTIONS_ID_TOKEN_REQUEST_TOKEN are
+          # injected into the runner environment only when id-token: write
+          # propagated to this callee, so their presence proves OIDC reached it.
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+            echo "::error::callee-oidc expected an OIDC issuer (id-token: write) but none propagated"
+            exit 1
+          fi
+          TOKEN="$(curl -sS -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=cascade-fleet" | jq -r '.value // ""')"
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+            echo "::error::callee-oidc could not mint an OIDC token"
+            exit 1
+          fi
+          echo "callee-oidc: OIDC token issued=yes (length ${#TOKEN})"
+          {
+            echo "## callee-oidc"
+            echo "- OIDC issuer propagated: yes"
+            echo "- OIDC token issued: yes"
+          } >> "$GITHUB_STEP_SUMMARY"

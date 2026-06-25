@@ -1,0 +1,37 @@
+name: deploy-app
+
+# Deploy callee for the two-env topology. Kept minimal: the callback-security
+# postures under test ride on the build callbacks, which fire on every
+# orchestrate run. This deploy exists so the repo has a valid staging/prod
+# promote chain.
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: false
+        type: string
+      sha:
+        required: false
+        type: string
+      version:
+        required: false
+        type: string
+      dry_run:
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Stub deploy-app
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          SHA: ${{ inputs.sha }}
+          VERSION: ${{ inputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          echo "deploy-app environment=${ENVIRONMENT} sha=${SHA} version=${VERSION} dry_run=${DRY_RUN}"
+          sleep 2

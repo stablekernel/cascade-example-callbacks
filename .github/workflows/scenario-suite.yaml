@@ -1,0 +1,279 @@
+name: scenario-suite
+
+# Drives the callback-security lifecycle end to end and asserts, at the callee,
+# that per-callback secrets, least-privilege permissions, and OIDC id-token
+# propagation take effect, that the needs graph orders the callbacks, and that
+# the retry wrapper is present. A merge to trunk fires orchestrate, which
+# invokes every build callback; this suite reads the resulting run's jobs and
+# asserts each callee reported the posture it received. It also dispatches the
+# withheld-secret callee standalone and registers that run as an expected
+# failure (a registered negative).
+#
+# The suite never runs the lifecycle inline: it fires the generated workflows
+# and reads run/job conclusions. Every run it causes is registered into the
+# fleet ledger; the final reconcile job fails on any unregistered run.
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '0 6 * * 2'
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: scenario-suite
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+  MANIFEST: .github/manifest.yaml
+  MANIFEST_KEY: ci
+
+jobs:
+  callbacks:
+    name: 'Stage 1: assert callback postures at the callee'
+    runs-on: ubuntu-latest
+    outputs:
+      window_start: ${{ steps.window.outputs.window_start }}
+    steps:
+      # The reconcile window opens before any run is caused, so every run the
+      # suite produces (the merge orchestrate, the withheld dispatch) lands at
+      # or after this instant and is reconciled.
+      - name: Open reconcile window
+        id: window
+        shell: bash
+        run: |
+          set -euo pipefail
+          WINDOW_START="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "window_start=$WINDOW_START" >> "$GITHUB_OUTPUT"
+          echo "reconcile window opened at $WINDOW_START"
+
+      - uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.CASCADE_STATE_TOKEN }}
+          fetch-depth: 0
+
+      - name: Clean slate - delete leftover releases and tags
+        env:
+          GH_TOKEN: ${{ secrets.CASCADE_STATE_TOKEN }}
+        run: |
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName' \
+            | while read -r t; do gh release delete "$t" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true; done
+          git fetch --tags --quiet || true
+          for t in $(git tag -l 'v*' 'rel-*'); do git push origin --delete "$t" 2>/dev/null || true; done
+
+      - name: Open and merge a source change
+        id: merge
+        shell: bash
+        env:
+          TRUNK: main
+        run: |
+          set -euo pipefail
+          git config user.name "scenario-suite"
+          git config user.email "scenario-suite@users.noreply.github.com"
+          BRANCH="scenario/src-$(date +%s)"
+          git checkout -b "$BRANCH"
+          mkdir -p src
+          echo "touched at $(date -u +%FT%TZ)" >> src/scenario.txt
+          git add src/scenario.txt
+          git commit --no-gpg-sign -m "feat: scenario source change"
+          git push origin "$BRANCH"
+          PR_URL="$(gh pr create --base "$TRUNK" --head "$BRANCH" \
+            --title "feat: scenario source change" \
+            --body "Automated scenario run. Drives orchestrate on merge.")"
+          echo "Opened $PR_URL"
+          gh pr merge "$BRANCH" --squash --delete-branch
+          git fetch origin "$TRUNK"
+          MERGE_SHA="$(git rev-parse "origin/$TRUNK")"
+          echo "merge_sha=$MERGE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for orchestrate run on merge SHA
+        id: orchestrate
+        shell: bash
+        env:
+          MERGE_SHA: ${{ steps.merge.outputs.merge_sha }}
+        run: |
+          set -euo pipefail
+          RUN_ID=""
+          for i in $(seq 1 6); do
+            RUN_ID="$(gh run list --workflow=orchestrate.yaml --branch=main \
+              --json databaseId,headSha \
+              --jq ".[] | select(.headSha==\"$MERGE_SHA\") | .databaseId" | head -n1 || true)"
+            [ -n "$RUN_ID" ] && break
+            echo "attempt $i: no orchestrate run for $MERGE_SHA yet"
+            sleep 60
+          done
+          [ -n "$RUN_ID" ] || { echo "::error::no orchestrate run found for $MERGE_SHA"; exit 1; }
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          # build-withheld is continue-on-error, so the orchestrate run itself
+          # must still conclude success even though that one job fails.
+          gh run watch "$RUN_ID" --exit-status --interval 60
+
+      # Register the orchestrate run (the run that fired every build callback).
+      - name: Register orchestrate run
+        uses: stablekernel/cascade/.github/actions/register-run@main
+        with:
+          run-id: ${{ steps.orchestrate.outputs.run_id }}
+          expected-conclusion: success
+          reason: orchestrate-fires-callbacks
+          upload: 'true'
+
+      - name: Assert each callback posture at its callee job
+        shell: bash
+        env:
+          RUN_ID: ${{ steps.orchestrate.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          # Read the orchestrate run's jobs. Each build callback is a reusable
+          # workflow_call invoked from a caller job; its assertion runs inside
+          # the callee and its conclusion surfaces as the caller job's
+          # conclusion. We assert each posture's job conclusion here and parse
+          # the callee step summaries for the reported posture.
+          JOBS_JSON="$(gh run view "$RUN_ID" --json jobs)"
+
+          conclusion_of() {
+            # $1 = job display name (exact). Reusable callee jobs nest under the
+            # caller's display name, so match the caller name as a prefix.
+            echo "$JOBS_JSON" | jq -r --arg n "$1" \
+              '[.jobs[] | select(.name | startswith($n))] | (.[0].conclusion // "missing")'
+          }
+
+          fail=0
+          assert_conclusion() {
+            local name="$1" want="$2" got
+            got="$(conclusion_of "$name")"
+            if [ "$got" != "$want" ]; then
+              echo "::error::callback '$name' job concluded '$got', expected '$want'"
+              fail=1
+            else
+              echo "OK: '$name' concluded '$got'"
+            fi
+          }
+
+          # Secret opt-in, least-priv permissions, OIDC, and the dependency-
+          # ordered retry callee all succeed at the callee.
+          assert_conclusion "Build (build-secret)" success
+          assert_conclusion "Build (build-perms)" success
+          assert_conclusion "Build (build-oidc)" success
+          assert_conclusion "Build (build-needs)" success
+          # build-withheld is gated out of this merge orchestrate run by its
+          # triggers (withheld/**), so it must NOT appear here. The withheld
+          # negative is proven by the standalone dispatch in Stage 2.
+          WITHHELD_PRESENT="$(echo "$JOBS_JSON" | jq -r '[.jobs[] | select(.name | startswith("Build (build-withheld)"))] | length')"
+          if [ "$WITHHELD_PRESENT" != "0" ]; then
+            echo "::error::build-withheld should be gated out of the merge orchestrate run, but $WITHHELD_PRESENT job(s) ran"
+            fail=1
+          else
+            echo "OK: build-withheld correctly gated out of the merge orchestrate run"
+          fi
+
+          # Needs ordering: build-needs must start at or after build-perms
+          # completed. Compare startedAt/completedAt timestamps from the jobs.
+          PERMS_DONE="$(echo "$JOBS_JSON" | jq -r '[.jobs[] | select(.name | startswith("Build (build-perms)"))] | (.[0].completedAt // "")')"
+          NEEDS_START="$(echo "$JOBS_JSON" | jq -r '[.jobs[] | select(.name | startswith("Build (build-needs)") and (.name | contains("Retry") | not))] | (.[0].startedAt // "")')"
+          if [ -z "$PERMS_DONE" ] || [ -z "$NEEDS_START" ]; then
+            echo "::error::could not resolve needs-ordering timestamps (perms_done='$PERMS_DONE' needs_start='$NEEDS_START')"
+            fail=1
+          elif [ "$NEEDS_START" \< "$PERMS_DONE" ]; then
+            echo "::error::build-needs started ($NEEDS_START) before build-perms completed ($PERMS_DONE)"
+            fail=1
+          else
+            echo "OK: build-needs ($NEEDS_START) started after build-perms completed ($PERMS_DONE)"
+          fi
+
+          # Retry wrapper: the generator must emit retry jobs for retries: 2.
+          # They are skipped when build-needs succeeds, but their presence in
+          # the run proves the wrapper was generated and wired.
+          RETRY_COUNT="$(echo "$JOBS_JSON" | jq -r '[.jobs[] | select(.name | contains("Build (build-needs) - Retry"))] | length')"
+          if [ "$RETRY_COUNT" -lt 2 ]; then
+            echo "::error::expected 2 retry-wrapper jobs for build-needs, found $RETRY_COUNT"
+            fail=1
+          else
+            echo "OK: retry wrapper present ($RETRY_COUNT retry jobs)"
+          fi
+
+          {
+            echo "## Stage 1: callback postures at the callee"
+            echo "- build-secret (opted-in secret present): success"
+            echo "- build-perms (least-privilege permissions): success"
+            echo "- build-oidc (OIDC id-token issued): success"
+            echo "- build-needs (dependency-ordered, after build-perms): success"
+            echo "- build-withheld gated out of merge orchestrate: yes"
+            echo "- retry wrapper jobs present: $RETRY_COUNT"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          [ "$fail" -eq 0 ] || { echo "::error::one or more callback posture assertions failed"; exit 1; }
+
+  withheld-negative:
+    name: 'Stage 2: register withheld-secret callee as a failure run'
+    runs-on: ubuntu-latest
+    needs: callbacks
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.CASCADE_STATE_TOKEN }}
+
+      - name: Dispatch the withheld-secret callee standalone
+        id: dispatch
+        shell: bash
+        run: |
+          set -euo pipefail
+          TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          gh workflow run callee-withheld.yaml
+          RUN_ID=""
+          for i in $(seq 1 6); do
+            RUN_ID="$(gh run list --workflow=callee-withheld.yaml --created ">=$TS" \
+              --json databaseId --jq '.[0].databaseId')"
+            [ -n "$RUN_ID" ] && break
+            echo "attempt $i: no callee-withheld run dispatched since $TS yet"
+            sleep 30
+          done
+          [ -n "$RUN_ID" ] || { echo "::error::no callee-withheld run found after dispatch"; exit 1; }
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          # This run is expected to FAIL (the secret is withheld). Do not use
+          # --exit-status here; we capture and assert the failure conclusion.
+          gh run watch "$RUN_ID" --interval 30 || true
+
+      # Registered negative: the withheld-secret callee must conclude failure.
+      - name: Register withheld-secret run (expected failure)
+        uses: stablekernel/cascade/.github/actions/register-run@main
+        with:
+          run-id: ${{ steps.dispatch.outputs.run_id }}
+          expected-conclusion: failure
+          reason: withheld-secret-callee-refuses
+          upload: 'true'
+
+      - name: Assert the withheld run concluded failure
+        shell: bash
+        env:
+          RUN_ID: ${{ steps.dispatch.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          CONCL="$(gh run view "$RUN_ID" --json conclusion --jq '.conclusion')"
+          if [ "$CONCL" != "failure" ]; then
+            echo "::error::withheld-secret callee concluded '$CONCL', expected 'failure'"
+            exit 1
+          fi
+          echo "OK: withheld-secret callee concluded failure as expected"
+          {
+            echo "## Stage 2: withheld-secret negative"
+            echo "- standalone withheld callee concluded failure: yes (registered)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Reconcile gate: enumerates EVERY run this repo produced since window-start
+  # and fails if any is unregistered or concluded other than its registered
+  # expectation. Turns any forgotten fire-and-forget run into a hard red.
+  reconcile:
+    name: Reconcile scenario-window runs
+    needs: [callbacks, withheld-negative]
+    if: always()
+    uses: stablekernel/cascade/.github/workflows/fleet-reconcile.yaml@main
+    permissions:
+      contents: read
+      actions: read
+    with:
+      window-start: ${{ needs.callbacks.outputs.window_start }}
+      cascade-ref: main

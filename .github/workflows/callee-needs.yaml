@@ -1,0 +1,39 @@
+name: callee-needs
+
+# Callback callee for the needs-ordering + retry posture. The caller job
+# (emitted into orchestrate.yaml) declares needs on the build-perms caller job
+# and wraps this callee in a retry loop (retries: 2). This callee reports it
+# ran, so the suite can assert the ordering held and that the retry wrapper is
+# present in the generated caller.
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: false
+        type: string
+      sha:
+        required: false
+        type: string
+      version:
+        required: false
+        type: string
+      target_env:
+        required: false
+        type: string
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report ordered callee ran
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          TARGET_ENV: ${{ inputs.target_env }}
+        run: |
+          set -euo pipefail
+          echo "callee-needs: ran after its declared dependency (environment=${ENVIRONMENT} target_env=${TARGET_ENV})"
+          {
+            echo "## callee-needs"
+            echo "- dependency-ordered callee ran: yes"
+          } >> "$GITHUB_STEP_SUMMARY"

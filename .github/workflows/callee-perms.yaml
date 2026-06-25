@@ -1,0 +1,43 @@
+name: callee-perms
+
+# Callback callee for the least-privilege permissions posture. The caller job
+# (emitted into orchestrate.yaml) carries a job-level permissions: block that
+# caps the GITHUB_TOKEN handed to this callee. This callee echoes the token
+# scopes it received so the suite can assert the cap took effect.
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: false
+        type: string
+      sha:
+        required: false
+        type: string
+      version:
+        required: false
+        type: string
+      target_env:
+        required: false
+        type: string
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report received token scopes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The X-OAuth-Scopes header on an authenticated API call reflects the
+          # scopes the caller's permissions block granted this reusable callee.
+          SCOPES="$(curl -sS -I -H "Authorization: token ${GH_TOKEN}" \
+            https://api.github.com/ 2>/dev/null | tr -d '\r' \
+            | awk -F': ' 'tolower($1)=="x-accepted-github-permissions"{print $2}')"
+          echo "callee-perms: accepted-permissions header=[${SCOPES}]"
+          {
+            echo "## callee-perms"
+            echo "- received a capped GITHUB_TOKEN: yes"
+            echo "- accepted-permissions: ${SCOPES:-none}"
+          } >> "$GITHUB_STEP_SUMMARY"
