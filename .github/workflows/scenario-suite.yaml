@@ -108,8 +108,10 @@ jobs:
           done
           [ -n "$RUN_ID" ] || { echo "::error::no orchestrate run found for $MERGE_SHA"; exit 1; }
           echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
-          # build-withheld is continue-on-error, so the orchestrate run itself
-          # must still conclude success even though that one job fails.
+          # build-withheld is gated out of this merge by its triggers
+          # (withheld/**), so its caller job is skipped and the orchestrate run
+          # still concludes success. The withheld negative is proven by the
+          # standalone dispatch in Stage 2.
           gh run watch "$RUN_ID" --exit-status --interval 60
 
       # Register the orchestrate run (the run that fired every build callback).
@@ -160,20 +162,23 @@ jobs:
           assert_conclusion "Build (build-oidc)" success
           assert_conclusion "Build (build-needs)" success
           # build-withheld is gated out of this merge orchestrate run by its
-          # triggers (withheld/**), so it must NOT appear here. The withheld
-          # negative is proven by the standalone dispatch in Stage 2.
-          WITHHELD_PRESENT="$(echo "$JOBS_JSON" | jq -r '[.jobs[] | select(.name | startswith("Build (build-withheld)"))] | length')"
-          if [ "$WITHHELD_PRESENT" != "0" ]; then
-            echo "::error::build-withheld should be gated out of the merge orchestrate run, but $WITHHELD_PRESENT job(s) ran"
+          # triggers (withheld/**). A gated-out reusable-workflow caller is
+          # rendered as a skipped job in the run, so it is present by name but
+          # never executes. Assert no build-withheld job actually ran by
+          # counting only entries whose conclusion is not "skipped". The
+          # withheld negative is proven by the standalone dispatch in Stage 2.
+          WITHHELD_RAN="$(echo "$JOBS_JSON" | jq -r '[.jobs[] | select((.name | startswith("Build (build-withheld)")) and (.conclusion != "skipped"))] | length')"
+          if [ "$WITHHELD_RAN" != "0" ]; then
+            echo "::error::build-withheld should be gated out of the merge orchestrate run, but $WITHHELD_RAN job(s) executed"
             fail=1
           else
-            echo "OK: build-withheld correctly gated out of the merge orchestrate run"
+            echo "OK: build-withheld correctly gated out of the merge orchestrate run (no executed jobs)"
           fi
 
           # Needs ordering: build-needs must start at or after build-perms
           # completed. Compare startedAt/completedAt timestamps from the jobs.
           PERMS_DONE="$(echo "$JOBS_JSON" | jq -r '[.jobs[] | select(.name | startswith("Build (build-perms)"))] | (.[0].completedAt // "")')"
-          NEEDS_START="$(echo "$JOBS_JSON" | jq -r '[.jobs[] | select(.name | startswith("Build (build-needs)") and (.name | contains("Retry") | not))] | (.[0].startedAt // "")')"
+          NEEDS_START="$(echo "$JOBS_JSON" | jq -r '[.jobs[] | select((.name | startswith("Build (build-needs)")) and (.name | contains("Retry") | not))] | (.[0].startedAt // "")')"
           if [ -z "$PERMS_DONE" ] || [ -z "$NEEDS_START" ]; then
             echo "::error::could not resolve needs-ordering timestamps (perms_done='$PERMS_DONE' needs_start='$NEEDS_START')"
             fail=1
