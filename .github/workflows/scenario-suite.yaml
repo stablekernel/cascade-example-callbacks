@@ -72,8 +72,8 @@ jobs:
           TRUNK: main
         run: |
           set -euo pipefail
-          git config user.name "scenario-suite"
-          git config user.email "scenario-suite@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           BRANCH="scenario/src-$(date +%s)"
           git checkout -b "$BRANCH"
           mkdir -p src
@@ -85,7 +85,7 @@ jobs:
             --title "feat: scenario source change" \
             --body "Automated scenario run. Drives orchestrate on merge.")"
           echo "Opened $PR_URL"
-          gh pr merge "$BRANCH" --squash --delete-branch
+          gh pr merge "$BRANCH" --rebase --delete-branch
           git fetch origin "$TRUNK"
           MERGE_SHA="$(git rev-parse "origin/$TRUNK")"
           echo "merge_sha=$MERGE_SHA" >> "$GITHUB_OUTPUT"
