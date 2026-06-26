@@ -16,7 +16,6 @@ ci:
         triggers: []
         secrets:
           CALLBACK_SECRET: CALLBACK_SHARED_SECRET
-
       # Posture 2: a callback with an explicit least-privilege permissions block.
       # The callee echoes the token scopes it received.
       - name: build-perms
@@ -25,7 +24,6 @@ ci:
         permissions:
           contents: read
           packages: read
-
       # Posture 3: a callback requesting id-token: write so OIDC propagates to
       # the callee. The callee mints an OIDC token and asserts it was issued.
       - name: build-oidc
@@ -34,7 +32,6 @@ ci:
         permissions:
           contents: read
           id-token: write
-
       # Posture 4: a callback that depends on build-perms (needs ordering) and
       # carries a retry wrapper. The callee asserts the ordering and the suite
       # asserts the retry wrapper is emitted.
@@ -43,7 +40,6 @@ ci:
         triggers: []
         depends_on: [build-perms]
         retries: 2
-
       # Negative posture: a callback whose declared secret is intentionally NOT
       # set on the repo. The callee asserts the secret is ABSENT and fails. The
       # suite registers this run with expected-conclusion: failure.
@@ -62,4 +58,13 @@ ci:
         triggers: []
   state:
     prod: {}
-    staging: {}
+    staging:
+      sha: 608423b9bdd82c77c6ac081d9cf5e83245375703
+      version: v0.1.0-rc.0
+      committed_at: "2026-06-26T01:38:51Z"
+      committed_by: joshua-temple
+      deploys:
+        app:
+          sha: 608423b9bdd82c77c6ac081d9cf5e83245375703
+          deployed_at: "2026-06-26T01:38:51Z"
+          deployed_by: joshua-temple
