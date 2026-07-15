@@ -60,12 +60,12 @@ ci:
   state:
     prod: {}
     staging:
-      sha: d26cb22dfeceaa6fb5c6c342ebd5e2b4ac1c0082
-      version: v0.16.1-rc.0
-      committed_at: "2026-07-14T06:55:17Z"
+      sha: ad43967e4a1885d144523c13e688f0d9cfcf8e3e
+      version: v0.1.0-rc.0
+      committed_at: "2026-07-15T22:35:47Z"
       committed_by: joshua-temple
       deploys:
         app:
-          sha: d26cb22dfeceaa6fb5c6c342ebd5e2b4ac1c0082
-          deployed_at: "2026-07-14T06:55:17Z"
+          sha: ad43967e4a1885d144523c13e688f0d9cfcf8e3e
+          deployed_at: "2026-07-15T22:35:47Z"
           deployed_by: joshua-temple
