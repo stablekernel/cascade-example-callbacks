@@ -57,10 +57,10 @@ jobs:
         with:
           fetch-depth: 0
       - name: Setup CLI
-        uses: stablekernel/cascade/.github/actions/setup-cli@v0.16.3-rc.1
+        uses: stablekernel/cascade/.github/actions/setup-cli@v0.16.4-rc.0
         with:
           token: ${{ secrets.CASCADE_STATE_TOKEN }}
-          version: v0.16.3-rc.1
+          version: v0.16.4-rc.0
       - name: Run Setup
         id: setup
         env:
@@ -182,7 +182,7 @@ jobs:
           echo "| Build (build-secret) | ${{ needs.build-build-secret.result }} | abort |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Build (build-perms) | ${{ needs.build-build-perms.result }} | abort |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Build (build-oidc) | ${{ needs.build-build-oidc.result }} | abort |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Build (build-needs) | ${{ needs.build-build-needs.result }} | abort |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Build (build-needs) | ${{ (needs.build-build-needs.result == 'success' || needs.build-build-needs-retry-1.result == 'success' || needs.build-build-needs-retry-2.result == 'success') && 'success' || 'failure' }} | abort |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Build (build-withheld) | ${{ needs.build-build-withheld.result }} | abort |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Deploy (app) | ${{ needs.deploy-app.result }} | abort |" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
@@ -192,10 +192,10 @@ jobs:
             echo "_No outputs produced_" >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Setup CLI
-        uses: stablekernel/cascade/.github/actions/setup-cli@v0.16.3-rc.1
+        uses: stablekernel/cascade/.github/actions/setup-cli@v0.16.4-rc.0
         with:
           token: ${{ secrets.CASCADE_STATE_TOKEN }}
-          version: v0.16.3-rc.1
+          version: v0.16.4-rc.0
       - name: Generate Changelog
         id: changelog
         env:
@@ -345,7 +345,7 @@ jobs:
           echo "::error::Failed to write state via API after 10 attempts" >&2
           exit 1
       - name: Check for Failures
-        if: contains(fromJSON('["failure", "cancelled"]'), needs.build-build-secret.result) || contains(fromJSON('["failure", "cancelled"]'), needs.build-build-perms.result) || contains(fromJSON('["failure", "cancelled"]'), needs.build-build-oidc.result) || contains(fromJSON('["failure", "cancelled"]'), needs.build-build-needs.result) || contains(fromJSON('["failure", "cancelled"]'), needs.build-build-withheld.result) || contains(fromJSON('["failure", "cancelled"]'), needs.deploy-app.result)
+        if: contains(fromJSON('["failure", "cancelled"]'), needs.build-build-secret.result) || contains(fromJSON('["failure", "cancelled"]'), needs.build-build-perms.result) || contains(fromJSON('["failure", "cancelled"]'), needs.build-build-oidc.result) || (contains(fromJSON('["failure", "cancelled"]'), needs.build-build-needs.result) && !(needs.build-build-needs-retry-1.result == 'success' || needs.build-build-needs-retry-2.result == 'success')) || contains(fromJSON('["failure", "cancelled"]'), needs.build-build-withheld.result) || contains(fromJSON('["failure", "cancelled"]'), needs.deploy-app.result)
         run: |
           echo "One or more critical callbacks failed or were cancelled"
           exit 1
