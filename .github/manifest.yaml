@@ -2,7 +2,7 @@ ci:
   config:
     schema_version: 1
     trunk_branch: main
-    cli_version: v0.16.6-dryrun.80
+    cli_version: v0.16.6-rc.0
     cli_version_sha: c17b74089833ecc7b24f2babee7c17f6861b1d43
     state_token: ${{ secrets.CASCADE_STATE_TOKEN }}
     manifest_file: .github/manifest.yaml
@@ -61,7 +61,7 @@ ci:
     prod: {}
     staging:
       sha: 3ced1e9b2e92d731adc1e8566d485b0d0384ba8c
-      version: v0.1.0-rc.0
+      version: v0.16.6-rc.0
       committed_at: "2026-07-20T06:58:03Z"
       committed_by: joshua-temple
       deploys:
