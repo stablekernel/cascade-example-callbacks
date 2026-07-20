@@ -61,7 +61,7 @@ ci:
     prod: {}
     staging:
       sha: 579596598a8ed85fbb51e5553c82f97460782ed8
-      version: v0.1.0-rc.0
+      version: v0.16.6-dryrun.82
       committed_at: "2026-07-20T17:06:33Z"
       committed_by: joshua-temple
       deploys:
